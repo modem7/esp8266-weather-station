@@ -39,7 +39,7 @@ See more at https://thingpulse.com
 #include "OpenWeatherMapForecast.h"
 #include "WeatherStationFonts.h"
 #include "WeatherStationImages.h"
-
+#include "DHT.h"
 
 /***************************
  * Begin Settings
@@ -49,7 +49,7 @@ See more at https://thingpulse.com
 const char* WIFI_SSID = "yourssid";
 const char* WIFI_PWD = "yourpassw0rd";
 
-#define TZ              2       // (utc+) TZ in hours
+#define TZ              -1       // (utc+) TZ in hours
 #define DST_MN          60      // use 60mn for summer time in some countries
 
 // Setup
@@ -61,9 +61,16 @@ const int I2C_DISPLAY_ADDRESS = 0x3c;
 const int SDA_PIN = D3;
 const int SDC_PIN = D4;
 #else
-const int SDA_PIN = 5; //D3;
+const int SDA_PIN = 5; //D3;MAP_APP_ID
 const int SDC_PIN = 4; //D4;
 #endif
+
+// DHT Settings
+// #define DHTPIN D2 // NodeMCU
+#define DHTPIN D6 // Wemos D1R2 Mini
+#define DHTTYPE DHT22   // DHT22  (AM2302), AM2321
+char FormattedTemperature[10];
+char FormattedHumidity[10];
 
 
 // OpenWeatherMap Settings
@@ -76,7 +83,7 @@ result set and select the entry closest to the actual location you want to displ
 data for. It'll be a URL like https://openweathermap.org/city/2657896. The number
 at the end is what you assign to the constant below.
  */
-String OPEN_WEATHER_MAP_LOCATION_ID = "2657896";
+String OPEN_WEATHER_MAP_LOCATION_ID = "XXXX";
 
 // Pick a language code from this list:
 // Arabic - ar, Bulgarian - bg, Catalan - ca, Czech - cz, German - de, Greek - el,
@@ -86,7 +93,7 @@ String OPEN_WEATHER_MAP_LOCATION_ID = "2657896";
 // Portuguese - pt, Romanian - ro, Russian - ru, Swedish - se, Slovak - sk,
 // Slovenian - sl, Spanish - es, Turkish - tr, Ukrainian - ua, Vietnamese - vi,
 // Chinese Simplified - zh_cn, Chinese Traditional - zh_tw.
-String OPEN_WEATHER_MAP_LANGUAGE = "de";
+String OPEN_WEATHER_MAP_LANGUAGE = "en";
 const uint8_t MAX_FORECASTS = 4;
 
 const boolean IS_METRIC = true;
@@ -116,6 +123,8 @@ time_t now;
 
 // flag changed in the ticker function every 10 minutes
 bool readyForWeatherUpdate = false;
+// flag changed in the ticker function every 1 minute
+bool readyForDHTUpdate = false;
 
 String lastUpdate = "--";
 
@@ -129,14 +138,19 @@ void drawCurrentWeather(OLEDDisplay *display, OLEDDisplayUiState* state, int16_t
 void drawForecast(OLEDDisplay *display, OLEDDisplayUiState* state, int16_t x, int16_t y);
 void drawForecastDetails(OLEDDisplay *display, int x, int y, int dayIndex);
 void drawHeaderOverlay(OLEDDisplay *display, OLEDDisplayUiState* state);
+void drawIndoor(OLEDDisplay *display, OLEDDisplayUiState* state, int16_t x, int16_t y);
 void setReadyForWeatherUpdate();
 
+// Initialize the temperature/ humidity sensor
+DHT dht(DHTPIN, DHTTYPE);
+float humidity = 0.0;
+float temperature = 0.0;
 
 // Add frames
 // this array keeps function pointers to all frames
 // frames are the single views that slide from right to left
-FrameCallback frames[] = { drawDateTime, drawCurrentWeather, drawForecast };
-int numberOfFrames = 3;
+FrameCallback frames[] = { drawDateTime, drawCurrentWeather, drawForecast, drawIndoor };
+int numberOfFrames = 4;
 
 OverlayCallback overlays[] = { drawHeaderOverlay };
 int numberOfOverlays = 1;
@@ -214,6 +228,9 @@ void loop() {
     updateData(&display);
   }
 
+  if (readyForDHTUpdate && ui.getUiState()->frameState == FIXED)
+    updateDHT();
+
   int remainingTimeBudget = ui.update();
 
   if (remainingTimeBudget > 0) {
@@ -251,6 +268,19 @@ void updateData(OLEDDisplay *display) {
   readyForWeatherUpdate = false;
   drawProgress(display, 100, "Done...");
   delay(1000);
+
+  drawProgress(display, 70, "Updating DHT Sensor");
+  humidity = dht.readHumidity();
+  drawProgress(display, 80, "Updating DHT Sensor");
+  temperature = dht.readTemperature(!IS_METRIC);
+  delay(500);
+}
+
+// Called every 1 minute
+void updateDHT() {
+  humidity = dht.readHumidity();
+  temperature = dht.readTemperature(!IS_METRIC);
+  readyForDHTUpdate = false;
 }
 
 
@@ -313,6 +343,18 @@ void drawForecastDetails(OLEDDisplay *display, int x, int y, int dayIndex) {
   display->setTextAlignment(TEXT_ALIGN_LEFT);
 }
 
+void drawIndoor(OLEDDisplay *display, OLEDDisplayUiState* state, int16_t x, int16_t y) {
+  display->setTextAlignment(TEXT_ALIGN_CENTER);
+  display->setFont(ArialMT_Plain_10);
+  display->drawString(64 + x, 0, "DHT22 Indoor Sensor");
+  display->setFont(ArialMT_Plain_16);
+  dtostrf(temperature,4, 1, FormattedTemperature);
+  display->drawString(64+x, 12, "Temp: " + String(FormattedTemperature) + (IS_METRIC ? "°C": "°F"));
+  dtostrf(humidity,4, 1, FormattedHumidity);
+  display->drawString(64+x, 30, "Humidity: " + String(FormattedHumidity) + "%");
+
+}
+
 void drawHeaderOverlay(OLEDDisplay *display, OLEDDisplayUiState* state) {
   now = time(nullptr);
   struct tm* timeInfo;
@@ -333,4 +375,9 @@ void drawHeaderOverlay(OLEDDisplay *display, OLEDDisplayUiState* state) {
 void setReadyForWeatherUpdate() {
   Serial.println("Setting readyForUpdate to true");
   readyForWeatherUpdate = true;
+}
+
+void setReadyForDHTUpdate() {
+  Serial.println("Setting readyForDHTUpdate to true");
+  readyForDHTUpdate = true;
 }
